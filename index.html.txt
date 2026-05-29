@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ソフトテニス 前衛ポジショニングシミュレーター</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b132b;
+            color: #ffffff;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        h3 {
+            margin: 10px 0 5px 0;
+            font-size: 14px;
+            color: #a0aec0;
+            text-align: center;
+            padding: 0 10px;
+        }
+
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 390px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        canvas {
+            display: block;
+            background-color: #1a4d32;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            margin: 0 auto;
+            cursor: pointer;
+        }
+
+        /* 下部コントロールパネル */
+        .control-panel {
+            background-color: #1c2541;
+            border-radius: 16px;
+            padding: 16px;
+            margin-top: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* ポジション微調整用のスライダー */
+        .slider-wrapper {
+            margin-bottom: 5px;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: #485563;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        }
+
+        .slider-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #a0aec0;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h3>赤丸（相手後衛）を左右にドラッグして、前衛のポジションの変化を教えよう！</h3>
+    
+    <canvas id="courtCanvas" width="360" height="480"></canvas>
+
+    <div class="control-panel">
+        <div class="panel-title">⚙️ 前衛のポジション微調整</div>
+        <div class="slider-labels">
+            <span>← ストレート警戒</span>
+            <span>クロス警戒 →</span>
+        </div>
+        <div class="slider-wrapper">
+            <input type="range" id="positionSlider" min="0.3" max="0.7" step="0.01" value="0.5">
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('courtCanvas');
+const ctx = canvas.getContext('2d');
+const positionSlider = document.getElementById('positionSlider');
+
+// --- コートの実寸比率計算 ---
+// 縦: 23.77m, 横: 10.97m (ダブルスコートの規格)
+const REAL_WIDTH = 10.97;
+const REAL_HEIGHT = 23.77;
+const COURT_SCALE = 18.5; // 1メートルあたりのピクセル数
+
+// キャンバス内でのコートの配置位置とサイズ
+const court = {
+    width: REAL_WIDTH * COURT_SCALE,   // 約203px
+    height: REAL_HEIGHT * COURT_SCALE, // 約440px
+    x: 0,
+    y: 20
+};
+court.x = (canvas.width - court.width) / 2; // 中央配置
+
+// 相手（奥側）の後衛・打点位置（初期値は右のベースライン上）
+let opponentX = court.x + court.width * 0.8;
+let opponentY = court.y;
+
+let isDragging = false;
+let positionBias = parseFloat(positionSlider.value); // 前衛の寄り具合（0.5が中央）
+
+// イベントリスナー
+canvas.addEventListener('mousedown', startDrag);
+canvas.addEventListener('mousemove', drag);
+canvas.addEventListener('mouseup', endDrag);
+canvas.addEventListener('touchstart', startDrag, {passive: false});
+canvas.addEventListener('touchmove', drag, {passive: false});
+canvas.addEventListener('touchend', endDrag);
+
+positionSlider.addEventListener('input', (e) => {
+    positionBias = parseFloat(e.target.value);
+    draw();
+});
+
+function startDrag(e) {
+    const pos = getMousePos(e);
+    const dist = Math.hypot(pos.x - opponentX, pos.y - opponentY);
+    // タップ判定を少し広め（30px）にして操作しやすく
+    if (dist < 30) {
+        isDragging = true;
+        e.preventDefault();
+    }
+}
+
+function drag(e) {
+    if (!isDragging) return;
+    e.preventDefault();
+    const pos = getMousePos(e);
+    
+    // 相手のベースライン上に動きを制限（左右のコート幅＋αに制限）
+    opponentX = Math.max(court.x - 10, Math.min(court.x + court.width + 10, pos.x));
+    draw();
+}
+
+function endDrag() {
+    isDragging = false;
+}
+
+function getMousePos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+        x: clientX - rect.left,
+        y: clientY - rect.top
+    };
+}
+
+// メインの描画処理
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 背景（濃い紺）
+    ctx.fillStyle = '#0b132b';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 1. テニスコートの緑地
+    ctx.fillStyle = '#1e5e3a';
+    ctx.fillRect(court.x - 15, court.y, court.width + 30, court.height);
+
+    // 自分コートの左右の角（ベースラインの両端）
+    const myLeftCornerX = court.x;
+    const myLeftCornerY = court.y + court.height;
+    const myRightCornerX = court.x + court.width;
+    const myRightCornerY = court.y + court.height;
+
+    // 2. 打点から自分コートの両角を結んだ「守備範囲」の描画
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.2)'; // 薄い赤
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(opponentX, opponentY);
+    ctx.lineTo(myLeftCornerX, myLeftCornerY);
+    ctx.lineTo(myRightCornerX, myRightCornerY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // 3. テニスコートの白線（実寸比率通りに分割）
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+
+    // 外枠
+    ctx.strokeRect(court.x, court.y, court.width, court.height);
+
+    // ネット（全体のちょうど真ん中）
+    const netY = court.y + court.height / 2;
+    ctx.beginPath();
+    ctx.moveTo(court.x - 15, netY);
+    ctx.lineTo(court.x + court.width + 15, netY);
+    ctx.stroke();
+
+    // サービスライン（ネットから12.8mではなく、ベースラインから5.5m / 全体の約23.1%の位置）
+    const serviceLineOffset = (5.5 / REAL_HEIGHT) * court.height;
+    const sLineOpponentY = court.y + serviceLineOffset;
+    const sLineMyY = court.y + court.height - serviceLineOffset;
+
+    ctx.beginPath();
+    // 相手側サービスライン
+    ctx.moveTo(court.x, sLineOpponentY);
+    ctx.lineTo(court.x + court.width, sLineOpponentY);
+    // 自分側サービスライン
+    ctx.moveTo(court.x, sLineMyY);
+    ctx.lineTo(court.x + court.width, sLineMyY);
+    ctx.stroke();
+
+    // センターライン（サービスエリア内のみ）
+    ctx.beginPath();
+    ctx.moveTo(court.x + court.width / 2, sLineOpponentY);
+    ctx.lineTo(court.x + court.width / 2, sLineMyY);
+    ctx.stroke();
+
+    // 前衛の「基本ポジションの高さ」のガイド線（ネットから約3.5mの位置に設定）
+    const volleyerY = netY + (3.5 / REAL_HEIGHT) * court.height;
+    ctx.strokeStyle = '#a3e635';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(court.x - 15, volleyerY);
+    ctx.lineTo(court.x + court.width + 15, volleyerY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // コート横の「ネット」の目印テキスト
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ネ', court.x - 25, netY + 4);
+    ctx.fillText('ネ', court.x + court.width + 25, netY + 4);
+
+    // 4. 前衛のポジショニング計算（交点計算）
+    // 前衛の高さ(volleyerY)において、赤範囲の「左端の線」と「右端の線」のX座標を算出
+    const t = (volleyerY - opponentY) / court.height;
+    const rangeLeftX = opponentX + t * (myLeftCornerX - opponentX);
+    const rangeRightX = opponentX + t * (myRightCornerX - opponentX);
+
+    // スライダーの値（positionBias）に応じて、範囲の左端〜右端の間で位置を決定
+    // 0.5のとき、ちょうど範囲の真ん中（ストレートとクロスのド真ん中）に立ちます
+    const volleyerX = rangeLeftX + (rangeRightX - rangeLeftX) * positionBias;
+
+    // 5. 前衛（黄色）の描画
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.fillStyle = '#fef08a';
+    ctx.beginPath();
+    ctx.arc(volleyerX, volleyerY, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // 二重円
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(volleyerX, volleyerY, 15, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fabe3a';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('前衛', volleyerX + 20, volleyerY + 4);
+
+    // 6. ストレート・クロスの表示（打点に応じて自動判定）
+    ctx.fillStyle = '#fca5a5';
+    ctx.font = '12px sans-serif';
+    if (opponentX > court.x + court.width / 2) {
+        ctx.textAlign = 'left';
+        ctx.fillText('ストレート', court.x + 8, court.y + court.height - 15);
+        ctx.textAlign = 'right';
+        ctx.fillText('クロス', court.x + court.width - 8, court.y + court.height - 15);
+    } else {
+        ctx.textAlign = 'left';
+        ctx.fillText('クロス', court.x + 8, court.y + court.height - 15);
+        ctx.textAlign = 'right';
+        ctx.fillText('ストレート', court.x + court.width - 8, court.y + court.height - 15);
+    }
+
+    // 7. 相手後衛の打点（赤）の描画
+    ctx.fillStyle = '#ef4444';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(opponentX, opponentY, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('相手後衛', opponentX, opponentY - 10);
+}
+
+// 初期描画
+draw();
+</script>
+
+</body>
+</html>
